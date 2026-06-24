@@ -47,7 +47,7 @@ class VoiceBrain:
         groq_key = os.getenv("GROQ_API_KEY", "")
         hf_token  = os.getenv("HF_TOKEN", "")
 
-        if groq_key and groq_key not in ("your_groq_key_here", ""):
+        if groq_key and not groq_key.startswith("your_"):
             from groq import Groq
             self._client        = Groq(api_key=groq_key)
             self._provider      = "groq"
@@ -58,7 +58,7 @@ class VoiceBrain:
             self._active_model  = chain[0]
             self._chain         = chain
 
-        elif hf_token and hf_token not in ("your_huggingface_token_here", ""):
+        elif hf_token and not hf_token.startswith("your_"):
             from huggingface_hub import InferenceClient
             model = os.getenv("HF_MODEL", "mistralai/Mistral-7B-Instruct-v0.3")
             self._client        = InferenceClient(model=model, token=hf_token)
