@@ -1,0 +1,29 @@
+# secrets — never commit real keys
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual envs
+venv/
+.venv/
+env/
+
+# Supertonic model cache (downloaded on first run, ~400 MB)
+assets/
+*.onnx
+*.bin
+
+# macOS
+.DS_Store
+
+# Claude Code session files
+.claude/
