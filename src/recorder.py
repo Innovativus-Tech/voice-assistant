@@ -17,10 +17,12 @@ def record_until_silence(
     silence_duration:  float = 1.5,
     max_duration:      float = 30.0,
     pre_speech_chunks: int   = 8,
-    stop_event: Optional[threading.Event] = None,
+    stop_event:   Optional[threading.Event] = None,
+    commit_event: Optional[threading.Event] = None,
 ) -> Optional[str]:
     """
     Record until the user stops speaking or stop_event is set.
+    If commit_event is set mid-recording, return what was captured so far.
     Returns path to a temp WAV file, or None if no speech / cancelled.
     """
     max_silent = int(silence_duration * SAMPLE_RATE / CHUNK_SIZE)
@@ -37,6 +39,8 @@ def record_until_silence(
         for _ in range(max_chunks):
             if stop_event and stop_event.is_set():
                 return None
+            if commit_event and commit_event.is_set():
+                break   # process whatever we have so far
 
             data, _ = stream.read(CHUNK_SIZE)
             rms = float(np.sqrt(np.mean(data ** 2)))

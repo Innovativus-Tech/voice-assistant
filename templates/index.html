@@ -70,8 +70,8 @@
       width:7px;height:7px;border-radius:50%;
       background:var(--sub);transition:background .4s,box-shadow .4s;flex-shrink:0;
     }
-    #srv-dot.ok   {background:#4ade80;box-shadow:0 0 6px #4ade8088}
-    #srv-dot.bad  {background:#f87171;box-shadow:0 0 6px #f8717188}
+    #srv-dot.ok {background:#4ade80;box-shadow:0 0 6px #4ade8088}
+    #srv-dot.bad{background:#f87171;box-shadow:0 0 6px #f8717188}
 
     .tag{
       padding:3px 9px;border-radius:99px;font-size:11px;font-weight:500;
@@ -129,7 +129,7 @@
       color:#9aa5be;
     }
 
-    /* streaming bubble — appears while LLM is thinking */
+    /* streaming bubble */
     #stream-row{display:none}
     #stream-row .bubble{color:#9aa5be;padding-left:14px;border-left:2px solid rgba(99,102,241,.5)}
 
@@ -162,7 +162,6 @@
     /* ── orb ───────────────────────────────────────────────────── */
     #orb-wrap{position:relative;width:108px;height:108px;flex-shrink:0}
 
-    /* glow */
     #orb-glow{
       position:absolute;inset:-30px;border-radius:50%;pointer-events:none;
       background:radial-gradient(circle,rgba(99,102,241,.22) 0%,transparent 65%);
@@ -170,7 +169,6 @@
     }
     @keyframes breathe{0%,100%{opacity:.5;transform:scale(1)}50%{opacity:1;transform:scale(1.2)}}
 
-    /* spinning ring */
     #orb-ring{
       position:absolute;inset:-2px;border-radius:50%;
       background:conic-gradient(from 0deg,var(--i1),var(--i2),var(--i3),var(--i4),var(--i1));
@@ -178,7 +176,6 @@
     }
     @keyframes spin{to{transform:rotate(360deg)}}
 
-    /* dark fill */
     #orb-fill{
       position:absolute;inset:2px;border-radius:50%;
       background:linear-gradient(145deg,#0e1120,#090c17);
@@ -206,14 +203,18 @@
       width:68px;height:68px;border-radius:50%;border:none;
       background:transparent;color:#c7d2fe;
       cursor:pointer;display:flex;align-items:center;justify-content:center;
-      transition:transform .15s,color .3s;
+      transition:transform .15s,color .3s,opacity .2s;
     }
     #orb-btn:hover:not(:disabled){transform:scale(1.07)}
     #orb-btn:active:not(:disabled){transform:scale(.93)}
-    #orb-btn:disabled{cursor:not-allowed;opacity:.55}
+    #orb-btn:disabled{cursor:not-allowed;opacity:.45}
     #orb-btn svg{width:28px;height:28px}
 
-    /* stop badge — top-right of orb */
+    /* speaking state — mic pulses softly to invite barge-in */
+    #orb-wrap.speaking #orb-btn{color:#6ee7b7;animation:mglw 2s ease-in-out infinite}
+    @keyframes mglw{0%,100%{opacity:.75}50%{opacity:1}}
+
+    /* stop badge — top-right, always a hard cancel */
     #stop-btn{
       position:absolute;top:-1px;right:-1px;
       width:30px;height:30px;border-radius:50%;
@@ -223,19 +224,19 @@
       opacity:0;transform:scale(.4);pointer-events:none;
       transition:opacity .2s,transform .2s;z-index:5;
     }
-    #orb-wrap.listening #stop-btn,
+    #orb-wrap.listening  #stop-btn,
     #orb-wrap.transcribing #stop-btn,
-    #orb-wrap.thinking #stop-btn,
-    #orb-wrap.speaking #stop-btn{opacity:1;transform:scale(1);pointer-events:auto}
+    #orb-wrap.thinking   #stop-btn,
+    #orb-wrap.speaking   #stop-btn{opacity:1;transform:scale(1);pointer-events:auto}
 
-    /* ── status ────────────────────────────────────────────────── */
+    /* ── status / hint ─────────────────────────────────────────── */
     #status{font-size:13px;color:var(--sub);min-height:20px;transition:color .3s;letter-spacing:.05px}
     #status.active{color:#a5b4fc}
     #status.err{color:#fca5a5}
     .dotdot::after{content:'';animation:dd 1.3s steps(4,end) infinite}
     @keyframes dd{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
 
-    .hint{font-size:11px;color:var(--dim)}
+    #hint{font-size:11px;color:var(--dim);transition:opacity .2s}
 
     /* offline banner */
     #banner{
@@ -276,7 +277,7 @@
       <p>Say something to begin.</p>
     </div>
 
-    <!-- live streaming row — shown while LLM is generating -->
+    <!-- live streaming row — shown while LLM is generating / speaking -->
     <div class="row bot" id="stream-row">
       <div class="row-lbl">Assistant</div>
       <div class="bubble" id="stream-text"><span class="cursor"></span></div>
@@ -295,34 +296,28 @@
       <div id="orb-glow"></div>
       <div id="orb-ring"></div>
       <div id="orb-fill">
-        <button id="orb-btn" aria-label="Speak">
-          <!-- mic -->
+        <button id="orb-btn" aria-label="Toggle">
+          <!-- mic — idle / listening / speaking (barge-in invite) -->
           <svg id="ico-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
             <rect x="9" y="2" width="6" height="12" rx="3"/>
             <path d="M5 10a7 7 0 0 0 14 0"/>
             <line x1="12" y1="19" x2="12" y2="22"/>
             <line x1="8"  y1="22" x2="16" y2="22"/>
           </svg>
-          <!-- processing dots -->
+          <!-- processing dots — transcribing / thinking -->
           <svg id="ico-proc" viewBox="0 0 24 24" fill="currentColor" style="display:none;opacity:.7">
-            <circle cx="5"  cy="12" r="2"><animate attributeName="opacity" values="1;.2;1" dur="1.2s" begin="0s"    repeatCount="indefinite"/></circle>
-            <circle cx="12" cy="12" r="2"><animate attributeName="opacity" values="1;.2;1" dur="1.2s" begin=".4s"   repeatCount="indefinite"/></circle>
-            <circle cx="19" cy="12" r="2"><animate attributeName="opacity" values="1;.2;1" dur="1.2s" begin=".8s"   repeatCount="indefinite"/></circle>
-          </svg>
-          <!-- speaker -->
-          <svg id="ico-spk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="display:none">
-            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-            <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
-            <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+            <circle cx="5"  cy="12" r="2"><animate attributeName="opacity" values="1;.2;1" dur="1.2s" begin="0s"  repeatCount="indefinite"/></circle>
+            <circle cx="12" cy="12" r="2"><animate attributeName="opacity" values="1;.2;1" dur="1.2s" begin=".4s" repeatCount="indefinite"/></circle>
+            <circle cx="19" cy="12" r="2"><animate attributeName="opacity" values="1;.2;1" dur="1.2s" begin=".8s" repeatCount="indefinite"/></circle>
           </svg>
         </button>
       </div>
-      <!-- stop badge (appears when active) -->
+      <!-- hard-stop badge — always cancels everything, goes to idle -->
       <button id="stop-btn" aria-label="Stop">✕</button>
     </div>
 
     <div id="status">Press to speak</div>
-    <div class="hint">Space · Enter · Click</div>
+    <div id="hint">Space · Enter · Click</div>
   </footer>
 </div>
 
@@ -330,32 +325,39 @@
 <div id="fb-toast"></div>
 
 <script>
-  const orbWrap  = document.getElementById('orb-wrap');
-  const orbBtn   = document.getElementById('orb-btn');
-  const stopBtn  = document.getElementById('stop-btn');
-  const statusEl = document.getElementById('status');
-  const chatEl   = document.getElementById('chat');
-  const emptyEl  = document.getElementById('empty');
-  const waveEl   = document.getElementById('wave');
-  const clrBtn   = document.getElementById('clr-btn');
-  const dot      = document.getElementById('srv-dot');
-  const banner   = document.getElementById('banner');
-  const fbToast  = document.getElementById('fb-toast');
-  const modelTag = document.querySelector('.tag.accent');
+  const orbWrap    = document.getElementById('orb-wrap');
+  const orbBtn     = document.getElementById('orb-btn');
+  const stopBtn    = document.getElementById('stop-btn');
+  const statusEl   = document.getElementById('status');
+  const hintEl     = document.getElementById('hint');
+  const chatEl     = document.getElementById('chat');
+  const emptyEl    = document.getElementById('empty');
+  const waveEl     = document.getElementById('wave');
+  const clrBtn     = document.getElementById('clr-btn');
+  const dot        = document.getElementById('srv-dot');
+  const banner     = document.getElementById('banner');
+  const fbToast    = document.getElementById('fb-toast');
+  const modelTag   = document.querySelector('.tag.accent');
   const streamRow  = document.getElementById('stream-row');
   const streamText = document.getElementById('stream-text');
+
   const icons = {
     mic:  document.getElementById('ico-mic'),
     proc: document.getElementById('ico-proc'),
-    spk:  document.getElementById('ico-spk'),
   };
 
-  let polling    = null;
-  let lastCount  = 0;
-  let srvOk      = false;
-  let lastStream = '';
-  let activeModel = modelTag ? modelTag.textContent : '';
-  let fbTimer    = null;
+  let polling      = null;
+  let lastCount    = 0;
+  let srvOk        = false;
+  let activeModel  = modelTag ? modelTag.textContent : '';
+  let fbTimer      = null;
+  // set to true after a barge-in so a transient "idle" poll doesn't kill the loop
+  let bargingIn    = false;
+
+  /* ── helpers ───────────────────────────────────────────────── */
+  function escHtml(t) {
+    return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
 
   function showFallbackToast(model) {
     fbToast.textContent = `⚡ Rate limited — switched to ${model}`;
@@ -381,61 +383,69 @@
 
   /* ── state display ─────────────────────────────────────────── */
   const LABELS = {
-    idle:'Press to speak', listening:'Listening', transcribing:'Transcribing',
-    thinking:'Thinking', speaking:'Speaking',
+    idle:         'Press to speak',
+    listening:    'Listening',
+    transcribing: 'Transcribing',
+    thinking:     'Thinking',
+    speaking:     'Speaking',
   };
-  const ICON = { idle:'mic', listening:'mic', transcribing:'proc', thinking:'proc', speaking:'spk' };
+  const HINTS = {
+    idle:         'Space · Enter · Click',
+    listening:    'Click to process now · Esc to cancel',
+    transcribing: '',
+    thinking:     '',
+    speaking:     'Click to interrupt · Esc to stop',
+  };
+  // mic for idle/listening/speaking; proc dots for transcribing/thinking
+  const ICON = {
+    idle: 'mic', listening: 'mic', transcribing: 'proc', thinking: 'proc', speaking: 'mic',
+  };
 
   function applyState(s, err) {
-    orbWrap.className = (s !== 'idle') ? s : '';
+    orbWrap.className = s !== 'idle' ? s : '';
 
     const ico = ICON[s] || 'mic';
     Object.entries(icons).forEach(([k, el]) => el.style.display = k === ico ? '' : 'none');
 
-    const active = s !== 'idle';
-    statusEl.className  = err ? 'err' : (active ? 'active' : '');
+    statusEl.className   = err ? 'err' : (s !== 'idle' ? 'active' : '');
     statusEl.textContent = err || LABELS[s] || s;
-    if (active && !err) statusEl.classList.add('dotdot');
-    else statusEl.classList.remove('dotdot');
+    // animated dots during processing
+    if (!err && (s === 'transcribing' || s === 'thinking'))
+      statusEl.classList.add('dotdot');
+    else
+      statusEl.classList.remove('dotdot');
 
-    waveEl.className = s === 'speaking' ? 'on' : '';
-    orbBtn.disabled  = (s !== 'idle');
+    hintEl.textContent = HINTS[s] || '';
+    waveEl.className   = s === 'speaking' ? 'on' : '';
+
+    // Button disabled only while transcribing / thinking
+    orbBtn.disabled = (s === 'transcribing' || s === 'thinking');
   }
 
   /* ── streaming text ────────────────────────────────────────── */
   function showStream(text) {
-    if (!text) { streamRow.style.display = 'none'; lastStream = ''; return; }
+    if (!text) { streamRow.style.display = 'none'; return; }
     if (streamRow.style.display === 'none') {
       if (emptyEl) emptyEl.style.display = 'none';
       streamRow.style.display = '';
-      chatEl.appendChild(streamRow); // move to bottom
+      chatEl.appendChild(streamRow);
     }
     streamText.innerHTML = escHtml(text) + '<span class="cursor"></span>';
     chatEl.scrollTop = chatEl.scrollHeight;
-    lastStream = text;
-  }
-
-  function escHtml(t) {
-    return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
   /* ── add final message bubble ──────────────────────────────── */
   function addMsg(role, text) {
     if (emptyEl) emptyEl.style.display = 'none';
-    const row    = document.createElement('div');
+    const row = document.createElement('div');
     row.className = `row ${role === 'user' ? 'user' : 'bot'}`;
-
-    const lbl    = document.createElement('div');
+    const lbl = document.createElement('div');
     lbl.className = 'row-lbl';
     lbl.textContent = role === 'user' ? 'You' : 'Assistant';
-
-    const bub    = document.createElement('div');
+    const bub = document.createElement('div');
     bub.className = 'bubble';
     bub.textContent = text;
-
     row.append(lbl, bub);
-
-    // insert before stream-row
     chatEl.insertBefore(row, streamRow);
     chatEl.scrollTop = chatEl.scrollHeight;
   }
@@ -450,7 +460,7 @@
         applyState(d.status, d.error || null);
         showStream(d.streaming_text || '');
 
-        // detect model fallback and update header chip + show toast
+        // model fallback
         if (d.active_model && d.active_model !== activeModel) {
           const prev = activeModel;
           activeModel = d.active_model;
@@ -458,6 +468,7 @@
           if (prev) showFallbackToast(d.active_model);
         }
 
+        // new messages
         if (d.messages.length > lastCount) {
           for (let i = lastCount; i < d.messages.length; i++) {
             addMsg(d.messages[i].role, d.messages[i].content);
@@ -467,42 +478,61 @@
 
         if (d.status === 'idle') {
           showStream('');
-          clearInterval(polling); polling = null;
+          if (bargingIn) {
+            // Barge-in causes a brief idle flash before the new pipeline starts.
+            // Keep polling; the next cycles will show 'listening' then continue.
+            bargingIn = false;
+          } else {
+            clearInterval(polling); polling = null;
+          }
         }
       } catch (_) {}
-    }, 150);   // 150ms — fast enough to feel live
+    }, 150);
   }
 
-  /* ── orb click (start) ─────────────────────────────────────── */
+  /* ── toggle button ─────────────────────────────────────────── */
   orbBtn.addEventListener('click', async () => {
     if (!srvOk) { setSrv(false); return; }
     try {
-      const r = await fetch('/record', { method: 'POST' });
+      const r = await fetch('/toggle', { method: 'POST' });
       const d = await r.json();
-      if (!r.ok || d.error) { applyState('idle', d.error || `Error ${r.status}`); return; }
-      applyState('listening', null);
-      startPoll();
+      if (!r.ok) return;
+
+      if (d.action === 'started') {
+        applyState('listening', null);
+        startPoll();
+      } else if (d.action === 'commit') {
+        applyState('transcribing', null);
+        // poll is already running
+      } else if (d.action === 'barge_in') {
+        bargingIn = true;
+        applyState('listening', null);   // optimistic — server restarts in ~150 ms
+        startPoll();
+      } else if (d.action === 'stopped') {
+        showStream('');
+        if (polling) { clearInterval(polling); polling = null; }
+        applyState('idle', null);
+      }
     } catch (e) { applyState('idle', 'Cannot reach server'); setSrv(false); }
   });
 
-  /* ── stop button ───────────────────────────────────────────── */
+  /* ── hard-stop badge ───────────────────────────────────────── */
   stopBtn.addEventListener('click', async () => {
-    try {
-      await fetch('/stop', { method: 'POST' });
-      showStream('');
-      if (polling) { clearInterval(polling); polling = null; }
-      applyState('idle', null);
-    } catch (_) {}
+    bargingIn = false;
+    try { await fetch('/stop', { method: 'POST' }); } catch (_) {}
+    showStream('');
+    if (polling) { clearInterval(polling); polling = null; }
+    applyState('idle', null);
   });
 
   /* ── clear ─────────────────────────────────────────────────── */
   clrBtn.addEventListener('click', async () => {
+    bargingIn = false;
     try { await fetch('/reset', { method: 'POST' }); } catch (_) {}
-    lastCount = 0; lastStream = '';
+    lastCount = 0;
     showStream('');
-    // remove all .row elements
     [...chatEl.querySelectorAll('.row:not(#stream-row)')].forEach(el => el.remove());
-    emptyEl.style.display = '';
+    if (emptyEl) emptyEl.style.display = '';
     if (polling) { clearInterval(polling); polling = null; }
     applyState('idle', null);
   });
