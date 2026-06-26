@@ -224,12 +224,20 @@ def _pipeline() -> None:
             _state["streaming_text"] = ""
 
         # 3 + 4. Stream LLM tokens while speaking sentence-by-sentence concurrently.
-        # on_first_sentence fires when TTS worker begins playing the first sentence —
-        # status flips from "thinking" to "speaking" at that exact moment.
+        # on_first_sentence: status flips thinking → speaking when first audio starts.
+        # on_sentence_start: reveal each sentence in the UI the exact instant the
+        #   voice begins speaking it — text and audio stay perfectly in sync.
         def on_first_sentence():
             with _lock:
                 _state["status"]       = "speaking"
                 _state["active_model"] = get_brain().active_model
+
+        spoken_text = [""]
+        def on_sentence_start(sentence: str) -> None:
+            spoken_text[0] = (spoken_text[0] + " " + sentence).strip() \
+                if spoken_text[0] else sentence
+            with _lock:
+                _state["streaming_text"] = spoken_text[0]
 
         full_llm_text = ""
 
@@ -239,11 +247,11 @@ def _pipeline() -> None:
                 if _stop_event.is_set():
                     break
                 full_llm_text += token
-                with _lock:
-                    _state["streaming_text"] = full_llm_text
                 yield token
 
-        speak_stream(token_iter(), _stop_event, on_first_sentence=on_first_sentence)
+        speak_stream(token_iter(), _stop_event,
+                     on_first_sentence=on_first_sentence,
+                     on_sentence_start=on_sentence_start)
 
         with _lock:
             if full_llm_text:

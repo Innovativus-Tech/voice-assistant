@@ -16,8 +16,10 @@ SYSTEM_PROMPT = (
 # groq/compound and groq/compound-mini have NO daily token limit.
 GROQ_CHAIN = [
     "llama-3.3-70b-versatile",  # primary — best quality, 1K req/day
-    "groq/compound",            # fallback 1 — no token/day limit
-    "groq/compound-mini",       # fallback 2 — no token/day limit (smaller/faster)
+    "llama-3.1-8b-instant",     # fast free fallback, ~14.4K req/day
+    "gemma2-9b-it",             # alternate free 9B fallback
+    "groq/compound",            # no token/day limit
+    "groq/compound-mini",       # no token/day limit (smallest/fastest)
 ]
 
 

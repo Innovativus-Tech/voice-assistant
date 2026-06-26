@@ -27,12 +27,20 @@ def _get() -> tuple:
     return _tts, _style
 
 
-def _synth_play(tts, style, text: str, stop_event: threading.Event) -> None:
+def _synth_play(
+    tts, style, text: str,
+    stop_event: threading.Event,
+    on_play_start: Optional[Callable[[str], None]] = None,
+) -> None:
+    """Synthesise, then fire callback the instant playback begins, then wait."""
     wav, _ = tts.synthesize(text, voice_style=style, lang="en",
                             total_steps=5, speed=1.05)
-    if not stop_event.is_set():
-        sd.play(wav[0].astype(np.float32), samplerate=SR)
-        sd.wait()
+    if stop_event.is_set():
+        return
+    if on_play_start:
+        on_play_start(text)
+    sd.play(wav[0].astype(np.float32), samplerate=SR)
+    sd.wait()
 
 
 def speak(text: str, speed: float = 1.05) -> None:
@@ -48,6 +56,7 @@ def speak_stream(
     token_iter: Iterator[str],
     stop_event: threading.Event,
     on_first_sentence: Optional[Callable] = None,
+    on_sentence_start: Optional[Callable[[str], None]] = None,
 ) -> None:
     """
     Consume LLM tokens and speak sentence-by-sentence as they arrive.
@@ -55,6 +64,9 @@ def speak_stream(
     A background worker thread synthesises and plays each sentence while
     the main thread continues pulling tokens from the LLM — so generation
     and playback overlap, drastically reducing time-to-first-audio.
+
+    on_sentence_start(sentence) fires the *instant* each sentence begins
+    playing — caller uses it to reveal the text in sync with the voice.
     """
     tts, style = _get()
     play_q: "queue.Queue[Optional[str]]" = queue.Queue()
@@ -78,7 +90,8 @@ def speak_stream(
                     on_first_sentence()
                 _first[0] = True
             try:
-                _synth_play(tts, style, sentence, stop_event)
+                _synth_play(tts, style, sentence, stop_event,
+                            on_play_start=on_sentence_start)
             except Exception:
                 pass
 
