@@ -52,6 +52,24 @@ def speak(text: str, speed: float = 1.05) -> None:
     sd.wait()
 
 
+def speak_sentences(text: str, stop_event: threading.Event) -> None:
+    """
+    Speak an already-complete reply, one sentence at a time.
+
+    Used after the text is fully displayed: synthesising per sentence means
+    first audio starts after the first sentence (not the whole paragraph),
+    and stop_event can interrupt cleanly between sentences.
+    """
+    tts, style = _get()
+    sentences = [s.strip() for s in _SENT_RE.split(text) if s.strip()]
+    if not sentences:
+        return
+    for sentence in sentences:
+        if stop_event.is_set():
+            return
+        _synth_play(tts, style, sentence, stop_event)
+
+
 def speak_stream(
     token_iter: Iterator[str],
     stop_event: threading.Event,

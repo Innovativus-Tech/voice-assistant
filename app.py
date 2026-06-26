@@ -17,7 +17,7 @@ load_dotenv()
 from src.brain    import VoiceBrain
 from src.recorder import record_until_silence
 from src.stt      import transcribe
-from src.tts      import speak_stream, stop_audio
+from src.tts      import speak_sentences, stop_audio
 
 app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True
@@ -235,38 +235,34 @@ def _pipeline() -> None:
             _state["status"]         = "thinking"
             _state["streaming_text"] = ""
 
-        # 3 + 4. Text first, then voice.
-        # token_iter updates streaming_text on every token, so the full reply
-        # appears in the UI as the LLM writes it (~0.5-1s on Groq). The TTS
-        # worker speaks sentence-by-sentence concurrently — so the user reads
-        # the text first, then hears it spoken. Text display is driven by the
-        # token loop (reliable), NOT by TTS playback timing.
-        def on_first_sentence():
-            with _lock:
-                _state["status"]       = "speaking"
-                _state["active_model"] = get_brain().active_model
-
+        # 3. Stream the FULL reply into the UI first — status stays "thinking"
+        # and streaming_text grows token-by-token as the LLM writes (~0.5-1s).
+        # This runs with NO TTS competing for the GIL, so the text reliably
+        # appears on screen before any audio starts.
         full_llm_text = ""
+        for token in get_brain().stream_chat(user_text):
+            if _stop_event.is_set():
+                break
+            full_llm_text += token
+            with _lock:
+                _state["streaming_text"] = full_llm_text
 
-        def token_iter():
-            nonlocal full_llm_text
-            for token in get_brain().stream_chat(user_text):
-                if _stop_event.is_set():
-                    break
-                full_llm_text += token
-                with _lock:
-                    _state["streaming_text"] = full_llm_text
-                yield token
+        if not full_llm_text or _stop_event.is_set():
+            with _lock:
+                _state["streaming_text"] = ""
+            return
 
-        speak_stream(token_iter(), _stop_event,
-                     on_first_sentence=on_first_sentence)
+        # 4. Text is now fully visible. Flip to "speaking" and speak it
+        # sentence-by-sentence (first audio starts after the 1st sentence
+        # synthesises, not the whole paragraph).
+        with _lock:
+            _state["status"]       = "speaking"
+            _state["active_model"] = get_brain().active_model
+
+        speak_sentences(full_llm_text, _stop_event)
 
         with _lock:
-            if full_llm_text:
-                # Append the final message AND clear streaming_text atomically.
-                # The frontend poll sees both at once: it renders the bubble and
-                # drops the live stream row in the same tick — no flash, no dup.
-                _state["messages"].append({"role": "assistant", "content": full_llm_text})
+            _state["messages"].append({"role": "assistant", "content": full_llm_text})
             _state["streaming_text"] = ""
             _state["active_model"]   = get_brain().active_model
 
