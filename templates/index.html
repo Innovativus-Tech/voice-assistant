@@ -501,9 +501,9 @@
   /* ── streaming text ────────────────────────────────────────── */
   function showStream(text, freeze) {
     if (!text) { streamRow.style.display = 'none'; return; }
-    if (streamRow.style.display === 'none') {
+    if (streamRow.style.display === 'none' || streamRow.style.display === '') {
       if (emptyEl) emptyEl.style.display = 'none';
-      streamRow.style.display = '';
+      streamRow.style.display = 'flex';
       chatEl.appendChild(streamRow);
     }
     // freeze=true: text is final — remove the blinking cursor
@@ -557,11 +557,22 @@
           lastCount = d.messages.length;
         }
 
-        // Update stream row AFTER addMsg so the assistant bubble hides it first
-        // (prevents a flash where both stream row and bubble are visible).
-        // freeze=true removes cursor once speaking is done but text not yet bubbled.
-        const frozen = (d.status === 'idle');
-        showStream(d.streaming_text || '', frozen);
+        // Update stream row AFTER addMsg so the assistant bubble hides it first.
+        // During "speaking": show speaking_text (grows sentence-by-sentence in sync
+        // with the voice). If speaking_text is still empty (first sentence still
+        // synthesising), fall back to frozen streaming_text so the row isn't blank.
+        // During other states: show streaming_text (live LLM tokens).
+        let streamDisplay = '';
+        let frozen = false;
+        if (d.status === 'speaking') {
+          const spk = d.speaking_text || '';
+          streamDisplay = spk || d.streaming_text || '';
+          frozen = true;   // no blinking cursor — text appears complete per sentence
+        } else {
+          frozen = (d.status === 'idle');
+          streamDisplay = d.streaming_text || '';
+        }
+        showStream(streamDisplay, frozen);
 
         // Handshake: backend is holding at "ready" until we confirm the text
         // is painted. We've just called showStream with the full reply, so tell

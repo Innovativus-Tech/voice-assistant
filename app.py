@@ -41,6 +41,7 @@ _state = {
     "status":         "idle",   # idle|listening|transcribing|thinking|ready|speaking
     "messages":       [],
     "streaming_text": "",       # live LLM tokens — shown while generating
+    "speaking_text":  "",       # text revealed sentence-by-sentence in sync with voice
     "active_model":   "",       # updated each reply; changes on fallback
     "error":          None,
 }
@@ -55,7 +56,7 @@ def get_brain() -> VoiceBrain:
 
 
 # Bump this whenever behavior changes so you can confirm the running code.
-BUILD = "v3-handshake"
+BUILD = "v4-sync-text"
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -168,6 +169,7 @@ def toggle():
         with _lock:
             _state["status"]         = "idle"
             _state["streaming_text"] = ""
+            _state["speaking_text"]  = ""
             _state["error"]          = None
         return jsonify({"ok": True, "action": "stopped"})
 
@@ -184,6 +186,7 @@ def stop_route():
     with _lock:
         _state["status"]         = "idle"
         _state["streaming_text"] = ""
+        _state["speaking_text"]  = ""
         _state["error"]          = None
     return jsonify({"ok": True})
 
@@ -199,6 +202,7 @@ def reset():
         _state["status"]         = "idle"
         _state["messages"]       = []
         _state["streaming_text"] = ""
+        _state["speaking_text"]  = ""
         _state["error"]          = None
     with _brain_lock:
         if _brain:
@@ -222,6 +226,7 @@ def _barge_in_restart() -> None:
         _state["status"]         = "listening"
         _state["error"]          = None
         _state["streaming_text"] = ""
+        _state["speaking_text"]  = ""
     _pipeline()
 
 
@@ -291,17 +296,27 @@ def _pipeline() -> None:
         if _stop_event.is_set():
             with _lock:
                 _state["streaming_text"] = ""
+                _state["speaking_text"]  = ""
             return
 
         # 5. Text is confirmed on screen — now speak it sentence-by-sentence.
+        # speaking_text starts empty and grows one sentence at a time as each
+        # sentence's audio actually begins playing — text and voice stay in sync.
         with _lock:
-            _state["status"] = "speaking"
+            _state["status"]        = "speaking"
+            _state["speaking_text"] = ""
 
-        speak_sentences(full_llm_text, _stop_event)
+        def _on_sentence_start(sentence: str) -> None:
+            with _lock:
+                prev = _state["speaking_text"]
+                _state["speaking_text"] = (prev + " " + sentence).strip() if prev else sentence
+
+        speak_sentences(full_llm_text, _stop_event, on_sentence_start=_on_sentence_start)
 
         with _lock:
             _state["messages"].append({"role": "assistant", "content": full_llm_text})
             _state["streaming_text"] = ""
+            _state["speaking_text"]  = ""
             _state["active_model"]   = get_brain().active_model
 
     except Exception as exc:
