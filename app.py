@@ -54,6 +54,10 @@ def get_brain() -> VoiceBrain:
     return _brain
 
 
+# Bump this whenever behavior changes so you can confirm the running code.
+BUILD = "v3-handshake"
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -63,12 +67,17 @@ def index():
         model = get_brain().provider_info()
     except Exception:
         model = "—"
-    return render_template("index.html", model=model, voice=voice)
+    return render_template("index.html", model=model, voice=voice, build=BUILD)
 
 
 @app.route("/ping")
 def ping():
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "build": BUILD})
+
+
+@app.route("/version")
+def version():
+    return jsonify({"build": BUILD})
 
 
 @app.route("/status")

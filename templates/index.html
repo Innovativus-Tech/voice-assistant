@@ -324,6 +324,7 @@
       <div id="srv-dot"></div>
       <span class="tag accent">{{ model }}</span>
       <span class="tag">{{ voice }}</span>
+      <span class="tag" id="build-tag" title="running code version">{{ build }}</span>
       <button id="clr-btn">Clear</button>
     </div>
   </header>
@@ -394,6 +395,7 @@
 <div id="fb-toast"></div>
 
 <script>
+  console.log('%cVoice build: {{ build }}', 'color:#818cf8;font-weight:600');
   const orbWrap    = document.getElementById('orb-wrap');
   const orbBtn     = document.getElementById('orb-btn');
   const stopBtn    = document.getElementById('stop-btn');
