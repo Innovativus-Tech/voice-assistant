@@ -27,6 +27,10 @@ _brain_lock = threading.Lock()
 
 _stop_event   = threading.Event()
 _commit_event = threading.Event()
+# Set by the frontend (/speak_ready) once it has rendered the full reply text.
+# The pipeline waits on this before it starts speaking — guarantees the text
+# is on screen first, with no dependence on GIL/poll timing.
+_speak_gate   = threading.Event()
 
 # When True the running pipeline's finally block won't reset status to idle
 # (used during barge-in so the UI stays consistent).
@@ -34,7 +38,7 @@ _barge_in = False
 
 _lock  = threading.Lock()
 _state = {
-    "status":         "idle",   # idle|listening|transcribing|thinking|speaking
+    "status":         "idle",   # idle|listening|transcribing|thinking|ready|speaking
     "messages":       [],
     "streaming_text": "",       # live LLM tokens — shown while generating
     "active_model":   "",       # updated each reply; changes on fallback
@@ -83,6 +87,13 @@ def _no_cache_html(resp):
         resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         resp.headers["Pragma"]        = "no-cache"
     return resp
+
+
+@app.route("/speak_ready", methods=["POST"])
+def speak_ready():
+    """Frontend confirms it has rendered the reply text — release the gate."""
+    _speak_gate.set()
+    return jsonify({"ok": True})
 
 
 @app.route("/record", methods=["POST"])
@@ -135,6 +146,7 @@ def toggle():
         with _lock:
             _barge_in = True
         _stop_event.set()
+        _speak_gate.set()
         stop_audio()
         threading.Thread(target=_barge_in_restart, daemon=True).start()
         return jsonify({"ok": True, "action": "barge_in"})
@@ -142,6 +154,7 @@ def toggle():
     else:
         # transcribing / thinking — hard cancel
         _stop_event.set()
+        _speak_gate.set()
         stop_audio()
         with _lock:
             _state["status"]         = "idle"
@@ -157,6 +170,7 @@ def stop_route():
     with _lock:
         _barge_in = False
     _stop_event.set()
+    _speak_gate.set()
     stop_audio()
     with _lock:
         _state["status"]         = "idle"
@@ -169,6 +183,7 @@ def stop_route():
 def reset():
     global _brain, _barge_in
     _stop_event.set()
+    _speak_gate.set()
     stop_audio()
     with _lock:
         _barge_in = False
@@ -252,21 +267,24 @@ def _pipeline() -> None:
                 _state["streaming_text"] = ""
             return
 
-        # 4. Hold here briefly with status still "thinking" and the full text set.
-        # tts.synthesize() (next step) holds the GIL solid, which BLOCKS Flask
-        # from answering /status polls — so if we started synth immediately the
-        # frontend would never get a poll showing the text before audio.
-        # time.sleep() releases the GIL, guaranteeing several polls land and the
-        # full text paints on screen first. Then flip to "speaking" and speak.
+        # 4. Show the text and WAIT for the frontend to confirm it rendered it
+        # before speaking. status "ready" tells the frontend the full text is
+        # final; it paints it and POSTs /speak_ready, which sets _speak_gate.
+        # This guarantees text-on-screen-first with zero dependence on GIL or
+        # poll timing. 2s timeout is a safety net if no client is listening.
+        _speak_gate.clear()
         with _lock:
+            _state["status"]       = "ready"
             _state["active_model"] = get_brain().active_model
-        time.sleep(0.45)                      # ~5 polls @ 80ms — text reliably paints
+
+        _speak_gate.wait(timeout=2.0)
 
         if _stop_event.is_set():
             with _lock:
                 _state["streaming_text"] = ""
             return
 
+        # 5. Text is confirmed on screen — now speak it sentence-by-sentence.
         with _lock:
             _state["status"] = "speaking"
 

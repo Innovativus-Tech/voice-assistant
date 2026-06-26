@@ -422,6 +422,8 @@
   let fbTimer      = null;
   // set to true after a barge-in so a transient "idle" poll doesn't kill the loop
   let bargingIn    = false;
+  // true once we've told the backend the reply text is painted (per turn)
+  let speakAckSent = false;
 
   /* ── helpers ───────────────────────────────────────────────── */
   function escHtml(t) {
@@ -456,6 +458,7 @@
     listening:    'Listening',
     transcribing: 'Transcribing',
     thinking:     'Thinking',
+    ready:        'Speaking',
     speaking:     'Speaking',
   };
   const HINTS = {
@@ -465,13 +468,15 @@
     thinking:     '',
     speaking:     'Click to interrupt · Esc to stop',
   };
-  // mic for idle/listening/speaking; proc dots for transcribing/thinking
+  // mic for idle/listening/ready/speaking; proc dots for transcribing/thinking
   const ICON = {
-    idle: 'mic', listening: 'mic', transcribing: 'proc', thinking: 'proc', speaking: 'mic',
+    idle: 'mic', listening: 'mic', transcribing: 'proc', thinking: 'proc', ready: 'mic', speaking: 'mic',
   };
 
   function applyState(s, err) {
-    orbWrap.className = s !== 'idle' ? s : '';
+    // "ready" is the brief about-to-speak moment — show it as speaking.
+    const vis = (s === 'ready') ? 'speaking' : s;
+    orbWrap.className = vis !== 'idle' ? vis : '';
 
     const ico = ICON[s] || 'mic';
     Object.entries(icons).forEach(([k, el]) => el.style.display = k === ico ? '' : 'none');
@@ -485,7 +490,7 @@
       statusEl.classList.remove('dotdot');
 
     hintEl.textContent = HINTS[s] || '';
-    waveEl.className   = s === 'speaking' ? 'on' : '';
+    waveEl.className   = vis === 'speaking' ? 'on' : '';
 
     // Button disabled only while transcribing / thinking
     orbBtn.disabled = (s === 'transcribing' || s === 'thinking');
@@ -556,7 +561,22 @@
         const frozen = (d.status === 'idle');
         showStream(d.streaming_text || '', frozen);
 
+        // Handshake: backend is holding at "ready" until we confirm the text
+        // is painted. We've just called showStream with the full reply, so tell
+        // the server it can start speaking now. Guarded to fire once per turn.
+        if (d.status === 'ready' && !speakAckSent) {
+          speakAckSent = true;
+          // next frame guarantees the text is painted before we release the gate
+          requestAnimationFrame(() => {
+            fetch('/speak_ready', { method: 'POST' }).catch(() => {});
+          });
+        }
+        if (d.status === 'listening' || d.status === 'transcribing') {
+          speakAckSent = false;   // reset for the next turn
+        }
+
         if (d.status === 'idle') {
+          speakAckSent = false;
           if (bargingIn) {
             bargingIn = false;  // brief idle flash during barge-in — keep polling
           } else {
