@@ -235,21 +235,16 @@ def _pipeline() -> None:
             _state["status"]         = "thinking"
             _state["streaming_text"] = ""
 
-        # 3 + 4. LLM tokens feed the TTS queue; text is revealed sentence-by-sentence
-        # exactly when each sentence starts playing — voice and text stay in sync.
+        # 3 + 4. Text first, then voice.
+        # token_iter updates streaming_text on every token, so the full reply
+        # appears in the UI as the LLM writes it (~0.5-1s on Groq). The TTS
+        # worker speaks sentence-by-sentence concurrently — so the user reads
+        # the text first, then hears it spoken. Text display is driven by the
+        # token loop (reliable), NOT by TTS playback timing.
         def on_first_sentence():
             with _lock:
                 _state["status"]       = "speaking"
                 _state["active_model"] = get_brain().active_model
-
-        spoken_so_far = [""]
-
-        def on_sentence_start(sentence: str) -> None:
-            """Called from TTS worker the instant sd.play() fires for each sentence."""
-            prev = spoken_so_far[0]
-            spoken_so_far[0] = (prev + " " + sentence).strip() if prev else sentence
-            with _lock:
-                _state["streaming_text"] = spoken_so_far[0]
 
         full_llm_text = ""
 
@@ -259,18 +254,21 @@ def _pipeline() -> None:
                 if _stop_event.is_set():
                     break
                 full_llm_text += token
-                yield token          # don't update streaming_text here — on_sentence_start handles it
+                with _lock:
+                    _state["streaming_text"] = full_llm_text
+                yield token
 
         speak_stream(token_iter(), _stop_event,
-                     on_first_sentence=on_first_sentence,
-                     on_sentence_start=on_sentence_start)
+                     on_first_sentence=on_first_sentence)
 
         with _lock:
             if full_llm_text:
+                # Append the final message AND clear streaming_text atomically.
+                # The frontend poll sees both at once: it renders the bubble and
+                # drops the live stream row in the same tick — no flash, no dup.
                 _state["messages"].append({"role": "assistant", "content": full_llm_text})
-            # Keep streaming_text until frontend confirms it received the new message.
-            # Frontend clears the stream row the moment it adds the final bubble.
-            _state["active_model"] = get_brain().active_model
+            _state["streaming_text"] = ""
+            _state["active_model"]   = get_brain().active_model
 
     except Exception as exc:
         with _lock:
