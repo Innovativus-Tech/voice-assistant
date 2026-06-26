@@ -58,20 +58,44 @@ def speak_sentences(
     on_sentence_start: Optional[Callable[[str], None]] = None,
 ) -> None:
     """
-    Speak an already-complete reply, one sentence at a time.
+    Speak an already-complete reply with no gap between sentences.
 
-    on_sentence_start(sentence) fires the instant each sentence begins
-    playing — caller uses it to reveal text in sync with the voice.
+    A producer thread synthesises sentences into a small queue while the
+    main thread plays them, so sentence N+1 is ready the instant N ends.
+    on_sentence_start(sentence) fires when each sentence begins playing.
     """
     tts, style = _get()
     sentences = [s.strip() for s in _SENT_RE.split(text) if s.strip()]
     if not sentences:
         return
-    for sentence in sentences:
-        if stop_event.is_set():
-            return
-        _synth_play(tts, style, sentence, stop_event,
-                    on_play_start=on_sentence_start)
+
+    wav_q: "queue.Queue[Optional[tuple]]" = queue.Queue(maxsize=2)
+
+    def _producer() -> None:
+        for sentence in sentences:
+            if stop_event.is_set():
+                break
+            try:
+                wav, _ = tts.synthesize(
+                    sentence, voice_style=style, lang="en",
+                    total_steps=int(os.getenv("TTS_STEPS", "5")), speed=1.05,
+                )
+                wav_q.put((sentence, wav[0].astype(np.float32)))
+            except Exception:
+                break
+        wav_q.put(None)
+
+    threading.Thread(target=_producer, daemon=True).start()
+
+    while True:
+        item = wav_q.get()
+        if item is None or stop_event.is_set():
+            break
+        sentence, wav = item
+        if on_sentence_start:
+            on_sentence_start(sentence)
+        sd.play(wav, samplerate=SR)
+        sd.wait()
 
 
 def speak_stream(
