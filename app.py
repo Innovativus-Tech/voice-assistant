@@ -70,7 +70,19 @@ def ping():
 @app.route("/status")
 def status():
     with _lock:
-        return jsonify(_state.copy())
+        resp = jsonify(_state.copy())
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"]        = "no-cache"
+    return resp
+
+
+@app.after_request
+def _no_cache_html(resp):
+    """Force fresh HTML/JS every load — prevents stale cached templates."""
+    if resp.mimetype == "text/html":
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"]        = "no-cache"
+    return resp
 
 
 @app.route("/record", methods=["POST"])
@@ -223,21 +235,21 @@ def _pipeline() -> None:
             _state["status"]         = "thinking"
             _state["streaming_text"] = ""
 
-        # 3 + 4. Stream LLM tokens while speaking sentence-by-sentence concurrently.
-        # on_first_sentence: status flips thinking → speaking when first audio starts.
-        # on_sentence_start: reveal each sentence in the UI the exact instant the
-        #   voice begins speaking it — text and audio stay perfectly in sync.
+        # 3 + 4. LLM tokens feed the TTS queue; text is revealed sentence-by-sentence
+        # exactly when each sentence starts playing — voice and text stay in sync.
         def on_first_sentence():
             with _lock:
                 _state["status"]       = "speaking"
                 _state["active_model"] = get_brain().active_model
 
-        spoken_text = [""]
+        spoken_so_far = [""]
+
         def on_sentence_start(sentence: str) -> None:
-            spoken_text[0] = (spoken_text[0] + " " + sentence).strip() \
-                if spoken_text[0] else sentence
+            """Called from TTS worker the instant sd.play() fires for each sentence."""
+            prev = spoken_so_far[0]
+            spoken_so_far[0] = (prev + " " + sentence).strip() if prev else sentence
             with _lock:
-                _state["streaming_text"] = spoken_text[0]
+                _state["streaming_text"] = spoken_so_far[0]
 
         full_llm_text = ""
 
@@ -247,7 +259,7 @@ def _pipeline() -> None:
                 if _stop_event.is_set():
                     break
                 full_llm_text += token
-                yield token
+                yield token          # don't update streaming_text here — on_sentence_start handles it
 
         speak_stream(token_iter(), _stop_event,
                      on_first_sentence=on_first_sentence,
@@ -256,8 +268,9 @@ def _pipeline() -> None:
         with _lock:
             if full_llm_text:
                 _state["messages"].append({"role": "assistant", "content": full_llm_text})
-            _state["streaming_text"] = ""
-            _state["active_model"]   = get_brain().active_model
+            # Keep streaming_text until frontend confirms it received the new message.
+            # Frontend clears the stream row the moment it adds the final bubble.
+            _state["active_model"] = get_brain().active_model
 
     except Exception as exc:
         with _lock:
@@ -265,10 +278,11 @@ def _pipeline() -> None:
 
     finally:
         with _lock:
-            # Don't reset to idle when a barge-in restart is pending
             if not _barge_in:
                 _state["status"] = "idle"
-            _state["streaming_text"] = ""
+            # streaming_text is intentionally NOT cleared here.
+            # The frontend clears it as soon as it renders the final bubble,
+            # so the stream row stays visible right up until the bubble appears.
 
 
 # ── Entry ─────────────────────────────────────────────────────────────────────

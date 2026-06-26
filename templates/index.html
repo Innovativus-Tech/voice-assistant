@@ -129,9 +129,9 @@
       color:#9aa5be;
     }
 
-    /* streaming bubble */
+    /* streaming bubble — identical to final bot bubble so swap is invisible */
     #stream-row{display:none}
-    #stream-row .bubble{color:#9aa5be;padding-left:14px;border-left:2px solid rgba(99,102,241,.5)}
+    #stream-row .bubble{color:#9aa5be;padding-left:14px;border-left:2px solid rgba(139,92,246,.4)}
 
     .cursor{
       display:inline-block;width:2px;height:14px;
@@ -423,14 +423,17 @@
   }
 
   /* ── streaming text ────────────────────────────────────────── */
-  function showStream(text) {
+  function showStream(text, freeze) {
     if (!text) { streamRow.style.display = 'none'; return; }
     if (streamRow.style.display === 'none') {
       if (emptyEl) emptyEl.style.display = 'none';
       streamRow.style.display = '';
       chatEl.appendChild(streamRow);
     }
-    streamText.innerHTML = escHtml(text) + '<span class="cursor"></span>';
+    // freeze=true: text is final — remove the blinking cursor
+    streamText.innerHTML = freeze
+      ? escHtml(text)
+      : escHtml(text) + '<span class="cursor"></span>';
     chatEl.scrollTop = chatEl.scrollHeight;
   }
 
@@ -447,6 +450,9 @@
     bub.textContent = text;
     row.append(lbl, bub);
     chatEl.insertBefore(row, streamRow);
+    // For assistant messages, hide the stream row in the same paint frame —
+    // the bubble has the same text, so the transition is invisible.
+    if (role === 'assistant') showStream('');
     chatEl.scrollTop = chatEl.scrollHeight;
   }
 
@@ -458,7 +464,6 @@
         const d = await (await fetch('/status')).json();
 
         applyState(d.status, d.error || null);
-        showStream(d.streaming_text || '');
 
         // model fallback
         if (d.active_model && d.active_model !== activeModel) {
@@ -468,7 +473,7 @@
           if (prev) showFallbackToast(d.active_model);
         }
 
-        // new messages
+        // new messages — addMsg for assistant hides stream row atomically
         if (d.messages.length > lastCount) {
           for (let i = lastCount; i < d.messages.length; i++) {
             addMsg(d.messages[i].role, d.messages[i].content);
@@ -476,18 +481,21 @@
           lastCount = d.messages.length;
         }
 
+        // Update stream row AFTER addMsg so the assistant bubble hides it first
+        // (prevents a flash where both stream row and bubble are visible).
+        // freeze=true removes cursor once speaking is done but text not yet bubbled.
+        const frozen = (d.status === 'idle');
+        showStream(d.streaming_text || '', frozen);
+
         if (d.status === 'idle') {
-          showStream('');
           if (bargingIn) {
-            // Barge-in causes a brief idle flash before the new pipeline starts.
-            // Keep polling; the next cycles will show 'listening' then continue.
-            bargingIn = false;
+            bargingIn = false;  // brief idle flash during barge-in — keep polling
           } else {
             clearInterval(polling); polling = null;
           }
         }
       } catch (_) {}
-    }, 150);
+    }, 80);   // 80ms — fast enough to feel live without hammering CPU
   }
 
   /* ── toggle button ─────────────────────────────────────────── */
