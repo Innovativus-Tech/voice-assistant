@@ -34,7 +34,7 @@ def _synth_play(
 ) -> None:
     """Synthesise, then fire callback the instant playback begins, then wait."""
     wav, _ = tts.synthesize(text, voice_style=style, lang="en",
-                            total_steps=5, speed=1.05)
+                            total_steps=int(os.getenv("TTS_STEPS", "5")), speed=1.05)
     if stop_event.is_set():
         return
     if on_play_start:
@@ -47,7 +47,7 @@ def speak(text: str, speed: float = 1.05) -> None:
     """Synthesise text and play it synchronously (used by fallback/legacy paths)."""
     tts, style = _get()
     wav, _ = tts.synthesize(text, voice_style=style, lang="en",
-                             total_steps=5, speed=speed)
+                             total_steps=int(os.getenv("TTS_STEPS", "5")), speed=speed)
     sd.play(wav[0].astype(np.float32), samplerate=SR)
     sd.wait()
 

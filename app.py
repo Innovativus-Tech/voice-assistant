@@ -56,7 +56,7 @@ def get_brain() -> VoiceBrain:
 
 
 # Bump this whenever behavior changes so you can confirm the running code.
-BUILD = "v4-sync-text"
+BUILD = "v5-stable"
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -117,6 +117,7 @@ def record():
         _state["status"]         = "listening"
         _state["error"]          = None
         _state["streaming_text"] = ""
+        _state["speaking_text"]  = ""
 
     threading.Thread(target=_pipeline, daemon=True).start()
     return jsonify({"ok": True})
@@ -143,6 +144,7 @@ def toggle():
             _state["status"]         = "listening"
             _state["error"]          = None
             _state["streaming_text"] = ""
+            _state["speaking_text"]  = ""
         threading.Thread(target=_pipeline, daemon=True).start()
         return jsonify({"ok": True, "action": "started"})
 
@@ -263,11 +265,10 @@ def _pipeline() -> None:
             _state["messages"].append({"role": "user", "content": user_text})
             _state["status"]         = "thinking"
             _state["streaming_text"] = ""
+            _state["speaking_text"]  = ""
 
-        # 3. Stream the FULL reply into the UI first — status stays "thinking"
-        # and streaming_text grows token-by-token as the LLM writes (~0.5-1s).
-        # This runs with NO TTS competing for the GIL, so the text reliably
-        # appears on screen before any audio starts.
+        # 3. Stream the full LLM reply first — streaming_text grows token-by-token
+        # while status stays "thinking" so the user sees the text being generated.
         full_llm_text = ""
         for token in get_brain().stream_chat(user_text):
             if _stop_event.is_set():
@@ -279,32 +280,15 @@ def _pipeline() -> None:
         if not full_llm_text or _stop_event.is_set():
             with _lock:
                 _state["streaming_text"] = ""
-            return
-
-        # 4. Show the text and WAIT for the frontend to confirm it rendered it
-        # before speaking. status "ready" tells the frontend the full text is
-        # final; it paints it and POSTs /speak_ready, which sets _speak_gate.
-        # This guarantees text-on-screen-first with zero dependence on GIL or
-        # poll timing. 2s timeout is a safety net if no client is listening.
-        _speak_gate.clear()
-        with _lock:
-            _state["status"]       = "ready"
-            _state["active_model"] = get_brain().active_model
-
-        _speak_gate.wait(timeout=2.0)
-
-        if _stop_event.is_set():
-            with _lock:
-                _state["streaming_text"] = ""
                 _state["speaking_text"]  = ""
             return
 
-        # 5. Text is confirmed on screen — now speak it sentence-by-sentence.
-        # speaking_text starts empty and grows one sentence at a time as each
-        # sentence's audio actually begins playing — text and voice stay in sync.
+        # 4. Speak sentence-by-sentence; speaking_text grows in sync with voice
+        # so the text reveals itself as each sentence begins playing.
         with _lock:
             _state["status"]        = "speaking"
             _state["speaking_text"] = ""
+            _state["active_model"]  = get_brain().active_model
 
         def _on_sentence_start(sentence: str) -> None:
             with _lock:
@@ -317,7 +301,6 @@ def _pipeline() -> None:
             _state["messages"].append({"role": "assistant", "content": full_llm_text})
             _state["streaming_text"] = ""
             _state["speaking_text"]  = ""
-            _state["active_model"]   = get_brain().active_model
 
     except Exception as exc:
         with _lock:
@@ -327,9 +310,6 @@ def _pipeline() -> None:
         with _lock:
             if not _barge_in:
                 _state["status"] = "idle"
-            # streaming_text is intentionally NOT cleared here.
-            # The frontend clears it as soon as it renders the final bubble,
-            # so the stream row stays visible right up until the bubble appears.
 
 
 # ── Entry ─────────────────────────────────────────────────────────────────────

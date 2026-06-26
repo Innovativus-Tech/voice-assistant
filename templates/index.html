@@ -424,8 +424,6 @@
   let fbTimer      = null;
   // set to true after a barge-in so a transient "idle" poll doesn't kill the loop
   let bargingIn    = false;
-  // true once we've told the backend the reply text is painted (per turn)
-  let speakAckSent = false;
 
   /* ── helpers ───────────────────────────────────────────────── */
   function escHtml(t) {
@@ -574,22 +572,7 @@
         }
         showStream(streamDisplay, frozen);
 
-        // Handshake: backend is holding at "ready" until we confirm the text
-        // is painted. We've just called showStream with the full reply, so tell
-        // the server it can start speaking now. Guarded to fire once per turn.
-        if (d.status === 'ready' && !speakAckSent) {
-          speakAckSent = true;
-          // next frame guarantees the text is painted before we release the gate
-          requestAnimationFrame(() => {
-            fetch('/speak_ready', { method: 'POST' }).catch(() => {});
-          });
-        }
-        if (d.status === 'listening' || d.status === 'transcribing') {
-          speakAckSent = false;   // reset for the next turn
-        }
-
         if (d.status === 'idle') {
-          speakAckSent = false;
           if (bargingIn) {
             bargingIn = false;  // brief idle flash during barge-in — keep polling
           } else {
