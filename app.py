@@ -252,12 +252,23 @@ def _pipeline() -> None:
                 _state["streaming_text"] = ""
             return
 
-        # 4. Text is now fully visible. Flip to "speaking" and speak it
-        # sentence-by-sentence (first audio starts after the 1st sentence
-        # synthesises, not the whole paragraph).
+        # 4. Hold here briefly with status still "thinking" and the full text set.
+        # tts.synthesize() (next step) holds the GIL solid, which BLOCKS Flask
+        # from answering /status polls — so if we started synth immediately the
+        # frontend would never get a poll showing the text before audio.
+        # time.sleep() releases the GIL, guaranteeing several polls land and the
+        # full text paints on screen first. Then flip to "speaking" and speak.
         with _lock:
-            _state["status"]       = "speaking"
             _state["active_model"] = get_brain().active_model
+        time.sleep(0.45)                      # ~5 polls @ 80ms — text reliably paints
+
+        if _stop_event.is_set():
+            with _lock:
+                _state["streaming_text"] = ""
+            return
+
+        with _lock:
+            _state["status"] = "speaking"
 
         speak_sentences(full_llm_text, _stop_event)
 
