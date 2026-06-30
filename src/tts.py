@@ -12,6 +12,15 @@ from supertonic import TTS as SupertonicTTS
 
 SR = 44100
 
+# ElevenLabs-equivalent tuning for supertonic-3:
+#   total_steps=8   — the model's true default; we were using 5 (degraded quality)
+#   speed=1.0       — natural neutral pace (1.05 was slightly rushed)
+#   silence_duration=0.0 — we split sentences ourselves; no intra-chunk gaps wanted
+#   lang=None       — lets supertonic-3 auto-resolve to "na" (multilingual fallback),
+#                     which handles contractions and punctuation more robustly than "en"
+_STEPS    = int(os.getenv("TTS_STEPS", "8"))
+_SPEED    = float(os.getenv("TTS_SPEED", "1.0"))
+
 _tts:   Optional[SupertonicTTS] = None
 _style  = None
 
@@ -27,28 +36,22 @@ def _get() -> tuple:
     return _tts, _style
 
 
-def _synth_play(
-    tts, style, text: str,
-    stop_event: threading.Event,
-    on_play_start: Optional[Callable[[str], None]] = None,
-) -> None:
-    """Synthesise, then fire callback the instant playback begins, then wait."""
-    wav, _ = tts.synthesize(text, voice_style=style, lang="en",
-                            total_steps=int(os.getenv("TTS_STEPS", "5")), speed=1.05)
-    if stop_event.is_set():
-        return
-    if on_play_start:
-        on_play_start(text)
-    sd.play(wav[0].astype(np.float32), samplerate=SR)
-    sd.wait()
+def _synth(tts, style, text: str) -> np.ndarray:
+    """Synthesise text → float32 waveform array."""
+    wav, _ = tts.synthesize(
+        text,
+        voice_style=style,
+        total_steps=_STEPS,
+        speed=_SPEED,
+        silence_duration=0.0,  # we handle inter-sentence pacing ourselves
+    )
+    return wav[0].astype(np.float32)
 
 
-def speak(text: str, speed: float = 1.05) -> None:
-    """Synthesise text and play it synchronously (used by fallback/legacy paths)."""
+def speak(text: str) -> None:
+    """Synthesise text and play it synchronously (legacy/fallback path)."""
     tts, style = _get()
-    wav, _ = tts.synthesize(text, voice_style=style, lang="en",
-                             total_steps=int(os.getenv("TTS_STEPS", "5")), speed=speed)
-    sd.play(wav[0].astype(np.float32), samplerate=SR)
+    sd.play(_synth(tts, style, text), samplerate=SR)
     sd.wait()
 
 
@@ -61,8 +64,8 @@ def speak_sentences(
     Speak an already-complete reply with no gap between sentences.
 
     A producer thread synthesises sentences into a small queue while the
-    main thread plays them, so sentence N+1 is ready the instant N ends.
-    on_sentence_start(sentence) fires when each sentence begins playing.
+    playback thread plays them — sentence N+1 is ready the instant N ends.
+    on_sentence_start(sentence) fires the moment each sentence begins playing.
     """
     tts, style = _get()
     sentences = [s.strip() for s in _SENT_RE.split(text) if s.strip()]
@@ -76,11 +79,7 @@ def speak_sentences(
             if stop_event.is_set():
                 break
             try:
-                wav, _ = tts.synthesize(
-                    sentence, voice_style=style, lang="en",
-                    total_steps=int(os.getenv("TTS_STEPS", "5")), speed=1.05,
-                )
-                wav_q.put((sentence, wav[0].astype(np.float32)))
+                wav_q.put((sentence, _synth(tts, style, sentence)))
             except Exception:
                 break
         wav_q.put(None)
@@ -107,12 +106,9 @@ def speak_stream(
     """
     Consume LLM tokens and speak sentence-by-sentence as they arrive.
 
-    A background worker thread synthesises and plays each sentence while
-    the main thread continues pulling tokens from the LLM — so generation
-    and playback overlap, drastically reducing time-to-first-audio.
-
-    on_sentence_start(sentence) fires the *instant* each sentence begins
-    playing — caller uses it to reveal the text in sync with the voice.
+    A background worker synthesises and plays each sentence while the main
+    thread continues pulling LLM tokens — generation and playback overlap.
+    on_sentence_start(sentence) fires the instant each sentence begins playing.
     """
     tts, style = _get()
     play_q: "queue.Queue[Optional[str]]" = queue.Queue()
@@ -124,7 +120,6 @@ def speak_stream(
             if sentence is None:
                 break
             if stop_event.is_set():
-                # drain remaining items so the queue unblocks
                 while True:
                     try:
                         play_q.get_nowait()
@@ -136,8 +131,12 @@ def speak_stream(
                     on_first_sentence()
                 _first[0] = True
             try:
-                _synth_play(tts, style, sentence, stop_event,
-                            on_play_start=on_sentence_start)
+                wav = _synth(tts, style, sentence)
+                if not stop_event.is_set():
+                    if on_sentence_start:
+                        on_sentence_start(sentence)
+                    sd.play(wav, samplerate=SR)
+                    sd.wait()
             except Exception:
                 pass
 
@@ -150,18 +149,16 @@ def speak_stream(
             break
         buf += token
         parts = _SENT_RE.split(buf)
-        # all parts except the last are complete sentences
         for sentence in parts[:-1]:
             sentence = sentence.strip()
-            if len(sentence) > 6:   # skip very short fragments / stray punctuation
+            if len(sentence) > 6:
                 play_q.put(sentence)
         buf = parts[-1]
 
-    # flush any remaining text
     if buf.strip() and not stop_event.is_set():
         play_q.put(buf.strip())
 
-    play_q.put(None)   # signal worker to exit
+    play_q.put(None)
     worker.join()
 
 

@@ -56,7 +56,7 @@ def get_brain() -> VoiceBrain:
 
 
 # Bump this whenever behavior changes so you can confirm the running code.
-BUILD = "v6-fluent"
+BUILD = "v6-quality"
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
