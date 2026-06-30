@@ -237,6 +237,7 @@ def _pipeline() -> None:
         # 1. Record — stops on silence, stop_event (cancel), or commit_event (early process)
         audio = record_until_silence(
             silence_threshold=float(os.getenv("SILENCE_THRESHOLD", "0.01")),
+            silence_duration=float(os.getenv("SILENCE_DURATION", "0.5")),
             stop_event=_stop_event,
             commit_event=_commit_event,
         )

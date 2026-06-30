@@ -12,7 +12,7 @@ CHUNK_SIZE  = 1024
 
 def record_until_silence(
     silence_threshold: float = 0.01,
-    silence_duration:  float = 0.8,   # was 1.5 — cuts ~0.7s per turn
+    silence_duration:  float = 0.5,   # tight cut — tunable via SILENCE_DURATION env var
     max_duration:      float = 30.0,
     pre_speech_chunks: int   = 8,
     stop_event:   Optional[threading.Event] = None,
