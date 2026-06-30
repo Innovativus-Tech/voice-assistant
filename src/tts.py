@@ -19,7 +19,7 @@ SR = 44100
 #   lang=None       — lets supertonic-3 auto-resolve to "na" (multilingual fallback),
 #                     which handles contractions and punctuation more robustly than "en"
 _STEPS    = int(os.getenv("TTS_STEPS", "8"))
-_SPEED    = float(os.getenv("TTS_SPEED", "0.8"))
+_SPEED    = float(os.getenv("TTS_SPEED", "1.2"))
 
 _tts:   Optional[SupertonicTTS] = None
 _style  = None
