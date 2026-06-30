@@ -1,12 +1,10 @@
 """Microphone recording with automatic silence detection."""
 
-import tempfile
 import threading
 from typing import Optional
 
 import numpy as np
 import sounddevice as sd
-import soundfile as sf
 
 SAMPLE_RATE = 16000
 CHUNK_SIZE  = 1024
@@ -14,24 +12,24 @@ CHUNK_SIZE  = 1024
 
 def record_until_silence(
     silence_threshold: float = 0.01,
-    silence_duration:  float = 1.5,
+    silence_duration:  float = 0.8,   # was 1.5 — cuts ~0.7s per turn
     max_duration:      float = 30.0,
     pre_speech_chunks: int   = 8,
     stop_event:   Optional[threading.Event] = None,
     commit_event: Optional[threading.Event] = None,
-) -> Optional[str]:
+) -> Optional[np.ndarray]:
     """
     Record until the user stops speaking or stop_event is set.
-    If commit_event is set mid-recording, return what was captured so far.
-    Returns path to a temp WAV file, or None if no speech / cancelled.
+    Returns a float32 mono numpy array at 16 kHz, or None if no speech.
+    No temp file is written — the array is passed directly to the STT engine.
     """
     max_silent = int(silence_duration * SAMPLE_RATE / CHUNK_SIZE)
     max_chunks = int(max_duration     * SAMPLE_RATE / CHUNK_SIZE)
 
-    chunks: list    = []
-    pre_buf: list   = []
-    silent_n        = 0
-    speaking        = False
+    chunks: list  = []
+    pre_buf: list = []
+    silent_n      = 0
+    speaking      = False
 
     with sd.InputStream(
         samplerate=SAMPLE_RATE, channels=1, dtype="float32", blocksize=CHUNK_SIZE
@@ -40,7 +38,7 @@ def record_until_silence(
             if stop_event and stop_event.is_set():
                 return None
             if commit_event and commit_event.is_set():
-                break   # process whatever we have so far
+                break
 
             data, _ = stream.read(CHUNK_SIZE)
             rms = float(np.sqrt(np.mean(data ** 2)))
@@ -66,7 +64,5 @@ def record_until_silence(
     if not chunks:
         return None
 
-    audio   = np.concatenate(chunks, axis=0)
-    tmp     = tempfile.mktemp(suffix=".wav")
-    sf.write(tmp, audio, SAMPLE_RATE)
-    return tmp
+    # Flatten to 1-D float32 — what faster-whisper expects
+    return np.concatenate(chunks, axis=0).flatten()

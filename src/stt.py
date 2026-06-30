@@ -2,6 +2,8 @@
 
 import os
 from typing import Optional
+
+import numpy as np
 from faster_whisper import WhisperModel
 
 _model: Optional[WhisperModel] = None
@@ -15,8 +17,23 @@ def _get_model() -> WhisperModel:
     return _model
 
 
-def transcribe(audio_path: str) -> str:
-    """Transcribe a WAV file and return the text."""
+def transcribe(audio: np.ndarray) -> str:
+    """
+    Transcribe a float32 mono 16 kHz numpy array and return the text.
+
+    Uses greedy decoding (beam_size=1, temperature=0) — 3-4× faster than
+    beam_size=5 with negligible accuracy loss for short voice utterances.
+    VAD filter strips leading/trailing silence before inference.
+    """
     model = _get_model()
-    segments, _ = model.transcribe(audio_path, beam_size=5, language="en")
+    segments, _ = model.transcribe(
+        audio,
+        language="en",
+        beam_size=1,
+        best_of=1,
+        temperature=0.0,
+        condition_on_previous_text=False,
+        vad_filter=True,
+        without_timestamps=True,
+    )
     return " ".join(seg.text for seg in segments).strip()

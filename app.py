@@ -56,7 +56,7 @@ def get_brain() -> VoiceBrain:
 
 
 # Bump this whenever behavior changes so you can confirm the running code.
-BUILD = "v6-quality"
+BUILD = "v7-fast"
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -235,25 +235,24 @@ def _barge_in_restart() -> None:
 def _pipeline() -> None:
     try:
         # 1. Record — stops on silence, stop_event (cancel), or commit_event (early process)
-        audio_path = record_until_silence(
+        audio = record_until_silence(
             silence_threshold=float(os.getenv("SILENCE_THRESHOLD", "0.01")),
             stop_event=_stop_event,
             commit_event=_commit_event,
         )
         _commit_event.clear()   # consume the commit signal
 
-        if _stop_event.is_set() or not audio_path:
+        if _stop_event.is_set() or audio is None:
             with _lock:
                 if not _stop_event.is_set():
                     _state["error"] = "No speech detected — try again."
             return
 
-        # 2. Transcribe
+        # 2. Transcribe — passes numpy array directly, no temp file written
         with _lock:
             _state["status"] = "transcribing"
 
-        user_text = transcribe(audio_path)
-        os.unlink(audio_path)
+        user_text = transcribe(audio)
 
         if not user_text.strip() or _stop_event.is_set():
             with _lock:
