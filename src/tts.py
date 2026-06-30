@@ -36,6 +36,16 @@ def _get() -> tuple:
     return _tts, _style
 
 
+def warmup() -> None:
+    """Pre-load the model + prime ONNX kernels so the first turn isn't slow."""
+    tts, style = _get()
+    try:
+        tts.synthesize("Hi.", voice_style=style,
+                       total_steps=_STEPS, speed=_SPEED, silence_duration=0.0)
+    except Exception:
+        pass
+
+
 def _synth(tts, style, text: str) -> np.ndarray:
     """Synthesise text → float32 waveform array."""
     wav, _ = tts.synthesize(

@@ -16,8 +16,8 @@ load_dotenv()
 
 from src.brain    import VoiceBrain
 from src.recorder import record_until_silence
-from src.stt      import transcribe
-from src.tts      import speak_sentences, stop_audio
+from src.stt      import transcribe, warmup as stt_warmup
+from src.tts      import speak_sentences, stop_audio, warmup as tts_warmup
 
 app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True
@@ -27,22 +27,17 @@ _brain_lock = threading.Lock()
 
 _stop_event   = threading.Event()
 _commit_event = threading.Event()
-# Set by the frontend (/speak_ready) once it has rendered the full reply text.
-# The pipeline waits on this before it starts speaking — guarantees the text
-# is on screen first, with no dependence on GIL/poll timing.
-_speak_gate   = threading.Event()
 
-# When True the running pipeline's finally block won't reset status to idle
-# (used during barge-in so the UI stays consistent).
+# True during barge-in so the pipeline's finally block doesn't flip to idle.
 _barge_in = False
 
 _lock  = threading.Lock()
 _state = {
-    "status":         "idle",   # idle|listening|transcribing|thinking|ready|speaking
+    "status":         "idle",   # idle|listening|transcribing|thinking|speaking
     "messages":       [],
     "streaming_text": "",       # live LLM tokens — shown while generating
     "speaking_text":  "",       # text revealed sentence-by-sentence in sync with voice
-    "active_model":   "",       # updated each reply; changes on fallback
+    "active_model":   "",
     "error":          None,
 }
 
@@ -56,7 +51,7 @@ def get_brain() -> VoiceBrain:
 
 
 # Bump this whenever behavior changes so you can confirm the running code.
-BUILD = "v7-fast"
+BUILD = "v9-warmup"
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -99,30 +94,6 @@ def _no_cache_html(resp):
     return resp
 
 
-@app.route("/speak_ready", methods=["POST"])
-def speak_ready():
-    """Frontend confirms it has rendered the reply text — release the gate."""
-    _speak_gate.set()
-    return jsonify({"ok": True})
-
-
-@app.route("/record", methods=["POST"])
-def record():
-    """Legacy start-recording endpoint (also called internally)."""
-    with _lock:
-        if _state["status"] != "idle":
-            return jsonify({"error": "Already processing"}), 400
-        _stop_event.clear()
-        _commit_event.clear()
-        _state["status"]         = "listening"
-        _state["error"]          = None
-        _state["streaming_text"] = ""
-        _state["speaking_text"]  = ""
-
-    threading.Thread(target=_pipeline, daemon=True).start()
-    return jsonify({"ok": True})
-
-
 @app.route("/toggle", methods=["POST"])
 def toggle():
     """
@@ -149,24 +120,19 @@ def toggle():
         return jsonify({"ok": True, "action": "started"})
 
     elif current == "listening":
-        # Process whatever the user has said so far — don't wait for silence
         _commit_event.set()
         return jsonify({"ok": True, "action": "commit"})
 
     elif current == "speaking":
-        # Barge-in: stop playback, restart the whole listen→speak cycle
         with _lock:
             _barge_in = True
         _stop_event.set()
-        _speak_gate.set()
         stop_audio()
         threading.Thread(target=_barge_in_restart, daemon=True).start()
         return jsonify({"ok": True, "action": "barge_in"})
 
     else:
-        # transcribing / thinking — hard cancel
         _stop_event.set()
-        _speak_gate.set()
         stop_audio()
         with _lock:
             _state["status"]         = "idle"
@@ -183,7 +149,6 @@ def stop_route():
     with _lock:
         _barge_in = False
     _stop_event.set()
-    _speak_gate.set()
     stop_audio()
     with _lock:
         _state["status"]         = "idle"
@@ -197,7 +162,6 @@ def stop_route():
 def reset():
     global _brain, _barge_in
     _stop_event.set()
-    _speak_gate.set()
     stop_audio()
     with _lock:
         _barge_in = False
@@ -215,12 +179,9 @@ def reset():
 # ── Pipeline ─────────────────────────────────────────────────────────────────
 
 def _barge_in_restart() -> None:
-    """
-    Called in a background thread after barge-in.
-    Waits for the old pipeline to fully exit, then restarts the listen cycle.
-    """
+    """Background thread: wait for old pipeline to exit, restart listen cycle."""
     global _barge_in
-    time.sleep(0.15)   # pipeline's finally block has ~0ms of work after sd.stop()
+    time.sleep(0.15)
     _stop_event.clear()
     _commit_event.clear()
     with _lock:
@@ -234,14 +195,15 @@ def _barge_in_restart() -> None:
 
 def _pipeline() -> None:
     try:
-        # 1. Record — stops on silence, stop_event (cancel), or commit_event (early process)
-        audio = record_until_silence(
+        # 1. Record + transcribe overlap: STT runs during the silence window.
+        audio, early_text = record_until_silence(
             silence_threshold=float(os.getenv("SILENCE_THRESHOLD", "0.01")),
             silence_duration=float(os.getenv("SILENCE_DURATION", "0.5")),
             stop_event=_stop_event,
             commit_event=_commit_event,
+            early_transcribe=transcribe,
         )
-        _commit_event.clear()   # consume the commit signal
+        _commit_event.clear()
 
         if _stop_event.is_set() or audio is None:
             with _lock:
@@ -249,11 +211,11 @@ def _pipeline() -> None:
                     _state["error"] = "No speech detected — try again."
             return
 
-        # 2. Transcribe — passes numpy array directly, no temp file written
+        # 2. Use early transcription if ready (almost always), else run now.
         with _lock:
             _state["status"] = "transcribing"
 
-        user_text = transcribe(audio)
+        user_text = early_text if early_text else transcribe(audio)
 
         if not user_text.strip() or _stop_event.is_set():
             with _lock:
@@ -267,13 +229,22 @@ def _pipeline() -> None:
             _state["streaming_text"] = ""
             _state["speaking_text"]  = ""
 
-        # 3. Stream the full LLM reply first — streaming_text grows token-by-token
-        # while status stays "thinking" so the user sees the text being generated.
+        # 3. Stream LLM tokens. Batch state updates by character count so we
+        # don't acquire _lock on every single token (was ~hundreds of lock
+        # acquisitions per reply, competing with /status polling).
         full_llm_text = ""
+        last_pushed   = 0
         for token in get_brain().stream_chat(user_text):
             if _stop_event.is_set():
                 break
             full_llm_text += token
+            if len(full_llm_text) - last_pushed >= 12:   # ~every 2-3 tokens
+                with _lock:
+                    _state["streaming_text"] = full_llm_text
+                last_pushed = len(full_llm_text)
+
+        # final flush — ensure UI shows the complete text
+        if full_llm_text:
             with _lock:
                 _state["streaming_text"] = full_llm_text
 
@@ -283,8 +254,7 @@ def _pipeline() -> None:
                 _state["speaking_text"]  = ""
             return
 
-        # 4. Speak sentence-by-sentence; speaking_text grows in sync with voice
-        # so the text reveals itself as each sentence begins playing.
+        # 4. Speak sentence-by-sentence; speaking_text grows in sync with voice.
         with _lock:
             _state["status"]        = "speaking"
             _state["speaking_text"] = ""
@@ -319,6 +289,18 @@ def _quit(sig, frame):
     os._exit(0)
 
 
+def _warmup_models() -> None:
+    """Background: pre-load Whisper + Supertonic so first turn isn't slow."""
+    t0 = time.time()
+    threads = [
+        threading.Thread(target=stt_warmup, daemon=True),
+        threading.Thread(target=tts_warmup, daemon=True),
+    ]
+    for t in threads: t.start()
+    for t in threads: t.join()
+    print(f"  ✓ Models warmed in {time.time()-t0:.1f}s")
+
+
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, _quit)
 
@@ -339,6 +321,12 @@ if __name__ == "__main__":
         print("  ⚠  No LLM key found in .env")
         print("     Add GROQ_API_KEY (free at https://console.groq.com)")
     print()
+    print("  Warming models in background...")
+
+    # Pre-warm in a background thread so the server starts accepting connections
+    # immediately; models are usually ready before the user clicks the mic.
+    threading.Thread(target=_warmup_models, daemon=True).start()
+
     print("  Ctrl+C to stop.\n")
 
     app.run(host="127.0.0.1", port=port,

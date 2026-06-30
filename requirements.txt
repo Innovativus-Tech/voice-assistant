@@ -1,10 +1,8 @@
 faster-whisper
 sounddevice
-soundfile
 numpy
 groq
 huggingface_hub
 supertonic
 python-dotenv
-rich
 flask
